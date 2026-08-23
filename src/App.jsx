@@ -34,9 +34,7 @@ export default function App() {
               <Siren className="h-6 w-6 animate-pulse" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight" style={{ color: '#e11d48' }}>
-  
-</h1>
+              
               <p className="text-xs text-slate-500 font-medium">Emergency Corridor Tracking System</p>
             </div>
           </div>

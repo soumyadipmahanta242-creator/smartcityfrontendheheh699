@@ -234,3 +234,115 @@ export default function App() {
     </div>
   );
 }
+import React, { useState, useEffect } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+// Fix default marker icon missing issue in React-Leaflet
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+
+const DefaultIcon = L.icon({
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41]
+});
+L.Marker.prototype.options.icon = DefaultIcon;
+
+// Helper component to auto-recenter map when coordinates change
+function ChangeView({ center }) {
+  const map = useMap();
+  map.setView(center);
+  return null;
+}
+
+export default function App() {
+  const [gpsData, setGpsData] = useState({
+    latitude: 26.7271,
+    longitude: 88.3953,
+    id: "AMB-9110"
+  });
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+
+  // 1. Poll Backend every 3 seconds for updated location
+  useEffect(() => {
+    const fetchLocation = () => {
+      fetch('http://localhost:5000/api/ambulance')
+        .then(res => res.json())
+        .then(data => setGpsData(data))
+        .catch(err => console.error("GPS Fetch Error:", err));
+    };
+
+    fetchLocation();
+    const interval = setInterval(fetchLocation, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // 2. Broadcast browser's live device location to backend
+  const startGPSBroadcast = () => {
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported by your browser");
+      return;
+    }
+
+    setIsBroadcasting(true);
+
+    navigator.geolocation.watchPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        
+        // Send updated GPS coordinates to backend
+        fetch('http://localhost:5000/api/ambulance/gps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ latitude, longitude })
+        });
+      },
+      (error) => console.error("Error getting location:", error),
+      { enableHighAccuracy: true }
+    );
+  };
+
+  const centerPosition = [gpsData.latitude, gpsData.longitude];
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-6 space-y-4">
+      <header className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
+        <div>
+          <h1 className="text-xl font-bold text-rose-600">Ambulance GPS Tracker</h1>
+          <p className="text-xs text-slate-500">
+            Lat: {gpsData.latitude} | Lng: {gpsData.longitude}
+          </p>
+        </div>
+        
+        <button 
+          onClick={startGPSBroadcast}
+          className={`px-4 py-2 text-xs font-bold rounded-lg text-white transition-all ${
+            isBroadcasting ? 'bg-emerald-600' : 'bg-rose-600 hover:bg-rose-700'
+          }`}
+        >
+          {isBroadcasting ? 'Broadcasting Device GPS...' : 'Enable Live Device GPS'}
+        </button>
+      </header>
+
+      {/* Interactive Map */}
+      <div className="h-[500px] rounded-xl overflow-hidden border shadow-sm">
+        <MapContainer center={centerPosition} zoom={15} style={{ height: '100%', width: '100%' }}>
+          <ChangeView center={centerPosition} />
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          <Marker position={centerPosition}>
+            <Popup>
+              <strong>{gpsData.id}</strong><br />
+              Status: Priority Active
+            </Popup>
+          </Marker>
+        </MapContainer>
+      </div>
+    </div>
+  );
+}

@@ -35,7 +35,8 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight" style={{ color: '#e11d48' }}>
-  ALooo Piyaazzzz TAmatara leloooooooooo
+  Emergency Vehicle Update System
+  
 </h1>
               <p className="text-xs text-slate-500 font-medium">Emergency Corridor Tracking System</p>
             </div>

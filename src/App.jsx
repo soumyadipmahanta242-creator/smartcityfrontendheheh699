@@ -89,7 +89,7 @@ export default function App() {
       <header className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
         <div>
           <h1 className="text-xl font-bold" style={{ color: '#960505' }}>
-  Ambulance GPS Tracker
+  ALOO PIYAZZZZ GPS
 </h1>
           <p className="text-xs text-slate-500">
             Status: {isConnected ? '🟢 Connected to Server' : '🔴 Disconnected'}
@@ -106,7 +106,7 @@ export default function App() {
             isTracking ? 'bg-emerald-600 cursor-default' : 'bg-rose-600 hover:bg-rose-700'
           }`}
         >
-          {isTracking ? 'Streaming GPS Live...' : 'Start WebSocket Tracking'}
+          {isTracking ? 'Streaming GPS Live...' : 'Click to enable live location'}
         </button>
       </header>
 

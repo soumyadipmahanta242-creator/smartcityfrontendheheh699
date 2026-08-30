@@ -1,3 +1,29 @@
+import React, { useState, useEffect } from 'react';
+
+export default function App() {
+  const [activeAmbulance, setActiveAmbulance] = useState(null);
+
+  useEffect(() => {
+    // Fetch telemetry from express backend
+    fetch('http://localhost:5000/api/ambulance')
+      .then((res) => res.json())
+      .then((data) => setActiveAmbulance(data))
+      .catch((err) => console.error("Error connecting to backend:", err));
+  }, []);
+
+  if (!activeAmbulance) {
+    return <div className="p-6 text-center text-slate-500">Connecting to Emergency Server...</div>;
+  }
+
+  return (
+    <div>
+      <h1>{activeAmbulance.id}</h1>
+      <p>Distance: {activeAmbulance.distance}</p>
+      <p>Status: {activeAmbulance.status}</p>
+    </div>
+  );
+}
+
 import React, { useState } from 'react';
 import { 
   Siren, 

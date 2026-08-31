@@ -16,8 +16,9 @@ const DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 // Establish single socket connection to server
-const socket = io('https://stubborn-effective-juice.ngrok-free.dev', {
-  transports: ['websocket', 'polling']
+// Works 24/7 globally without ngrok or local terminal running!
+const socket = io('https://smart-city-backend.onrender.com', {
+  transports: ['websocket', 'polling']
 });
 
 function ChangeView({ center }) {

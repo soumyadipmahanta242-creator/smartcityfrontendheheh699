@@ -16,7 +16,9 @@ const DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 // Establish single socket connection to server
-const socket = io('http://localhost:5000');
+const socket = io('https://stubborn-effective-juice.ngrok-free.dev', {
+  transports: ['websocket', 'polling']
+});
 
 function ChangeView({ center }) {
   const map = useMap();

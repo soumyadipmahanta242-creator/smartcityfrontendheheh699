@@ -17,7 +17,7 @@ L.Marker.prototype.options.icon = DefaultIcon;
 
 // Establish single socket connection to server
 // Works 24/7 globally without ngrok or local terminal running!
-const socket = io('https://smart-city-backend.onrender.com', {
+const socket = io('https://smart-city-backend-l3n3.onrender.com/', {
   transports: ['websocket', 'polling']
 });
 

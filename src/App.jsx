@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { io } from 'socket.io-client';
 import 'leaflet/dist/leaflet.css';
@@ -55,6 +55,45 @@ function distanceMeters(a, b) {
 
 const clientId = getOrCreateClientId();
 
+// --- Map view control ---------------------------------------------------
+// Lives inside <MapContainer> so it can grab the underlying Leaflet map
+// instance via useMap() and imperatively move the view — react-leaflet
+// doesn't re-render the map on prop changes for panning/zooming.
+function MapViewController({ points, selectedId }) {
+  const map = useMap();
+  const hasFitOnce = useRef(false);
+
+  useEffect(() => {
+    if (points.length === 0) return;
+
+    // A specific client was picked from the list — fly straight to them.
+    if (selectedId) {
+      const target = points.find(([id]) => id === selectedId);
+      if (target) {
+        const [, client] = target;
+        map.flyTo([client.latitude, client.longitude], 16, { duration: 1 });
+        return;
+      }
+    }
+
+    // Otherwise, auto-fit the view to show every active marker.
+    if (points.length === 1) {
+      const [, client] = points[0];
+      map.flyTo([client.latitude, client.longitude], 16, {
+        duration: hasFitOnce.current ? 1 : 0
+      });
+    } else {
+      const bounds = L.latLngBounds(
+        points.map(([, client]) => [client.latitude, client.longitude])
+      );
+      map.flyToBounds(bounds, { padding: [50, 50], duration: hasFitOnce.current ? 1 : 0 });
+    }
+    hasFitOnce.current = true;
+  }, [points, selectedId, map]);
+
+  return null;
+}
+
 export default function App() {
   const [activeClients, setActiveClients] = useState({});
   const [isConnected, setIsConnected] = useState(false);
@@ -63,6 +102,7 @@ export default function App() {
 
   const [roomInput, setRoomInput] = useState('');
   const [room, setRoom] = useState(null); // room the user has actually joined
+  const [selectedClientId, setSelectedClientId] = useState(null); // null = auto-fit all
 
   const socketRef = useRef(null);
   const watchIdRef = useRef(null);
@@ -101,6 +141,7 @@ export default function App() {
         delete next[leftId];
         return next;
       });
+      setSelectedClientId((prev) => (prev === leftId ? null : prev));
     });
 
     return () => {
@@ -132,6 +173,7 @@ export default function App() {
     setActiveClients({});
     setRoom(null);
     setGeoError(null);
+    setSelectedClientId(null);
   };
 
   const startLiveTracking = () => {
@@ -273,6 +315,34 @@ export default function App() {
         </div>
       </header>
 
+      {clientList.length > 0 && (
+        <div className="flex flex-wrap gap-2 bg-white p-3 rounded-xl shadow-sm border">
+          <button
+            onClick={() => setSelectedClientId(null)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all ${
+              selectedClientId === null
+                ? 'bg-rose-600 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            Show All
+          </button>
+          {clientList.map(([id]) => (
+            <button
+              key={id}
+              onClick={() => setSelectedClientId(id)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all ${
+                selectedClientId === id
+                  ? 'bg-rose-600 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {id === clientId ? 'You' : `Device ${id.slice(0, 8)}`}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="h-[500px] rounded-xl overflow-hidden border shadow-sm">
         <MapContainer
           center={[26.7271, 88.3953]}
@@ -283,6 +353,8 @@ export default function App() {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+
+          <MapViewController points={clientList} selectedId={selectedClientId} />
 
           {clientList.map(([id, client]) => (
             <Marker key={id} position={[client.latitude, client.longitude]}>

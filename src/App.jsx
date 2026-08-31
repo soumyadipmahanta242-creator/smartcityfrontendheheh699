@@ -145,6 +145,8 @@ export default function App() {
 
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
+        setGeoError(null); // a successful reading clears any prior warning
+
         const current = {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude
@@ -171,17 +173,31 @@ export default function App() {
         });
       },
       (err) => {
-        setIsTracking(false);
-        setGeoError(
-          err.code === err.PERMISSION_DENIED
-            ? 'Location permission denied. Enable it in your browser settings to share your position.'
-            : `GPS error: ${err.message}`
-        );
+        if (err.code === err.PERMISSION_DENIED) {
+          // Unrecoverable — stop tracking and surface it clearly.
+          if (watchIdRef.current !== null) {
+            navigator.geolocation.clearWatch(watchIdRef.current);
+            watchIdRef.current = null;
+          }
+          setIsTracking(false);
+          setGeoError(
+            'Location permission denied. Enable it in your browser settings to share your position.'
+          );
+        } else if (err.code === err.TIMEOUT) {
+          // Transient — watchPosition keeps retrying on its own, so don't
+          // kill tracking state. Just let the user know signal is weak.
+          setGeoError(
+            'Still trying to get a GPS fix — this can take longer with weak signal (indoors, mobile data, etc).'
+          );
+        } else {
+          // POSITION_UNAVAILABLE or other transient errors — same idea.
+          setGeoError(`GPS signal issue: ${err.message}. Retrying...`);
+        }
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: 10000
+        maximumAge: 5000,
+        timeout: 20000
       }
     );
   };

@@ -68,7 +68,7 @@ export default function App() {
     navigator.geolocation.watchPosition(
       (position) => {
         const payload = {
-          id: "AMB-9110",
+          id: socket.id,
           latitude: position.coords.latitude,
           longitude: position.coords.longitude
         };

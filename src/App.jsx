@@ -1,34 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import L from 'leaflet';
 import { io } from 'socket.io-client';
-import 'leaflet/dist/leaflet.css';
-
-import markerIcon from 'leaflet/dist/images/marker-icon.png';
-import markerShadow from 'leaflet/dist/images/marker-shadow.png';
-
-const DefaultIcon = L.icon({
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41]
-});
-L.Marker.prototype.options.icon = DefaultIcon;
 
 // --- Config -----------------------------------------------------------
-// Move this to a .env file: REACT_APP_BACKEND_URL / VITE_BACKEND_URL
+// Move these to a .env file:
+// REACT_APP_BACKEND_URL / VITE_BACKEND_URL
+// REACT_APP_GOOGLE_MAPS_API_KEY / VITE_GOOGLE_MAPS_API_KEY
+//
+// The Maps Embed API key just needs "Maps Embed API" enabled in Google
+// Cloud Console — no billing account required, it's free.
 const BACKEND_URL =
   process.env.REACT_APP_BACKEND_URL ||
   'https://smart-city-backend-l3n3.onrender.com/';
 
+const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '';
+
 const MOVE_THRESHOLD_METERS = 15; // don't emit unless moved at least this far
 const MIN_EMIT_INTERVAL_MS = 5000; // ...or at least this much time has passed
-
-// Esri World Imagery — free, no API key required, true satellite/aerial tiles.
-const SATELLITE_TILE_URL =
-  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-const SATELLITE_ATTRIBUTION =
-  'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community';
 
 // --- Stable per-device identity ----------------------------------------
 // socket.id changes on every reconnect, so we generate our own persistent
@@ -49,10 +36,10 @@ function distanceMeters(a, b) {
   if (!a || !b) return Infinity;
   const R = 6371000;
   const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(b.latitude - a.latitude);
-  const dLng = toRad(b.longitude - a.longitude);
-  const lat1 = toRad(a.latitude);
-  const lat2 = toRad(b.latitude);
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
   const h =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
@@ -60,25 +47,6 @@ function distanceMeters(a, b) {
 }
 
 const clientId = getOrCreateClientId();
-
-// --- Map view control ---------------------------------------------------
-// Lives inside <MapContainer> so it can grab the underlying Leaflet map
-// instance via useMap() and imperatively fly to the user's own position
-// as it updates — react-leaflet doesn't re-pan the map on prop changes.
-function MapViewController({ position }) {
-  const map = useMap();
-  const hasFitOnce = useRef(false);
-
-  useEffect(() => {
-    if (!position) return;
-    map.flyTo([position.latitude, position.longitude], 17, {
-      duration: hasFitOnce.current ? 1 : 0
-    });
-    hasFitOnce.current = true;
-  }, [position, map]);
-
-  return null;
-}
 
 export default function App() {
   const [isConnected, setIsConnected] = useState(false);
@@ -90,9 +58,8 @@ export default function App() {
   const watchIdRef = useRef(null);
   const lastSentRef = useRef({ position: null, time: 0 });
 
-  // Connect once on mount — no room/join step, this connection only ever
-  // sends this device's own location to the server for logging. The
-  // server never broadcasts any location back to any client.
+  // Connect once on mount — one-way feed: this device's own location goes
+  // to the server for logging, nothing is ever broadcast back.
   useEffect(() => {
     const socket = io(BACKEND_URL, {
       transports: ['websocket', 'polling']
@@ -124,14 +91,14 @@ export default function App() {
 
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
-        setGeoError(null); // a successful reading clears any prior warning
+        setGeoError(null);
 
         const current = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
         };
 
-        setMyPosition(current); // always update the on-screen marker
+        setMyPosition(current);
 
         const now = Date.now();
         const { position: lastPos, time: lastTime } = lastSentRef.current;
@@ -147,8 +114,8 @@ export default function App() {
 
         socketRef.current?.emit('send-location', {
           clientId,
-          latitude: current.latitude,
-          longitude: current.longitude
+          latitude: current.lat,
+          longitude: current.lng
         });
       },
       (err) => {
@@ -177,6 +144,28 @@ export default function App() {
     );
   };
 
+  if (!GOOGLE_MAPS_API_KEY) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
+        <div className="bg-white p-6 rounded-xl shadow-sm border max-w-md text-sm text-slate-600">
+          Missing Google Maps API key. Set{' '}
+          <code className="bg-slate-100 px-1 rounded">REACT_APP_GOOGLE_MAPS_API_KEY</code>{' '}
+          in your environment. Just enable "Maps Embed API" for it in Google
+          Cloud Console — no billing account needed, it's free.
+        </div>
+      </div>
+    );
+  }
+
+  // Maps Embed API URLs — plain iframes, no SDK, no billing required.
+  const satelliteSrc = myPosition
+    ? `https://www.google.com/maps/embed/v1/view?key=${GOOGLE_MAPS_API_KEY}&center=${myPosition.lat},${myPosition.lng}&zoom=18&maptype=satellite`
+    : null;
+
+  const streetViewSrc = myPosition
+    ? `https://www.google.com/maps/embed/v1/streetview?key=${GOOGLE_MAPS_API_KEY}&location=${myPosition.lat},${myPosition.lng}&heading=0&pitch=0&fov=90`
+    : null;
+
   return (
     <div className="min-h-screen bg-slate-50 p-6 space-y-4 font-sans">
       <header className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
@@ -201,32 +190,46 @@ export default function App() {
         </button>
       </header>
 
-      <div className="h-[500px] rounded-xl overflow-hidden border shadow-sm">
-        <MapContainer
-          center={myPosition ? [myPosition.latitude, myPosition.longitude] : [26.7271, 88.3953]}
-          zoom={myPosition ? 17 : 5}
-          style={{ height: '100%', width: '100%' }}
-        >
-          <TileLayer
-            attribution={SATELLITE_ATTRIBUTION}
-            url={SATELLITE_TILE_URL}
-            maxZoom={19}
-          />
-
-          <MapViewController position={myPosition} />
-
-          {myPosition && (
-            <Marker position={[myPosition.latitude, myPosition.longitude]}>
-              <Popup>
-                <strong>You</strong>
-                <br />
-                <strong>Lat:</strong> {myPosition.latitude.toFixed(4)}
-                <br />
-                <strong>Lng:</strong> {myPosition.longitude.toFixed(4)}
-              </Popup>
-            </Marker>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="h-[500px] rounded-xl overflow-hidden border shadow-sm bg-white">
+          <p className="text-xs font-semibold text-slate-500 px-3 py-2 border-b">
+            Satellite
+          </p>
+          {satelliteSrc ? (
+            <iframe
+              title="Satellite view"
+              width="100%"
+              height="100%"
+              style={{ border: 0 }}
+              loading="lazy"
+              src={satelliteSrc}
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-xs text-slate-400 text-center px-4">
+              Waiting for your location...
+            </div>
           )}
-        </MapContainer>
+        </div>
+
+        <div className="h-[500px] rounded-xl overflow-hidden border shadow-sm bg-white">
+          <p className="text-xs font-semibold text-slate-500 px-3 py-2 border-b">
+            Street View
+          </p>
+          {streetViewSrc ? (
+            <iframe
+              title="Street view"
+              width="100%"
+              height="100%"
+              style={{ border: 0 }}
+              loading="lazy"
+              src={streetViewSrc}
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-xs text-slate-400 text-center px-4">
+              Waiting for your location...
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

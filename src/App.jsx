@@ -2,25 +2,35 @@ import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 
 // --- Config -----------------------------------------------------------
-// Move these to a .env file:
-// REACT_APP_BACKEND_URL / VITE_BACKEND_URL
-// REACT_APP_GOOGLE_MAPS_API_KEY / VITE_GOOGLE_MAPS_API_KEY
+// This is a Vite project, so env vars must be prefixed VITE_ and read via
+// import.meta.env — NOT process.env.
+//
+// Set these in a .env file at your project root:
+// VITE_BACKEND_URL=...
+// VITE_GOOGLE_MAPS_API_KEY=...
 //
 // The Maps Embed API key just needs "Maps Embed API" enabled in Google
 // Cloud Console — no billing account required, it's free.
 const BACKEND_URL =
-  process.env.REACT_APP_BACKEND_URL ||
+  import.meta.env.VITE_BACKEND_URL ||
   'https://smart-city-backend-l3n3.onrender.com/';
 
-const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '';
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 
-const MOVE_THRESHOLD_METERS = 15; // don't emit unless moved at least this far
-const MIN_EMIT_INTERVAL_MS = 5000; // ...or at least this much time has passed
+const MOVE_THRESHOLD_METERS = 20; // don't emit unless moved at least this far
+const MIN_EMIT_INTERVAL_MS = 8000; // ...or at least this much time has passed
+
+// Shown before the user ever shares their location, and as the fallback
+// center whenever there's no live position yet.
+const DEFAULT_CENTER = { lat: 26.7271, lng: 88.3953 };
+
+const VIEW_MODES = [
+  { id: 'streetview', label: 'Street View' },
+  { id: 'roadmap', label: 'Roadmap (Drive/Walk)' },
+  { id: 'satellite', label: 'Satellite' }
+];
 
 // --- Stable per-device identity ----------------------------------------
-// socket.id changes on every reconnect, so we generate our own persistent
-// id once and store it locally. Sent along with each location update so
-// server-side logs can be correlated to "the same device" over time.
 function getOrCreateClientId() {
   const KEY = 'gps-app-client-id';
   let id = localStorage.getItem(KEY);
@@ -46,6 +56,34 @@ function distanceMeters(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
+// Builds the Maps Embed API iframe URL for the current view mode.
+// Note: the Embed API only supports "roadmap" and "satellite" as maptype
+// values — "hybrid" isn't available here (that's a full JS API feature),
+// so "roadmap" (roads + labels, the same style Google Maps navigation
+// itself uses) stands in for a drive/walk-friendly view.
+// - roadmap/satellite: uses "place" mode once a real position exists, which
+//   drops a pin (pointer) at that exact coordinate and moves as it updates.
+//   Before that, falls back to plain "view" mode centered on DEFAULT_CENTER
+//   with no pin, so there's always something sensible on screen.
+// - streetview: centers the panorama on the live position, or the default
+//   center before tracking starts.
+function buildMapSrc(mode, position) {
+  const center = position || DEFAULT_CENTER;
+  const centerStr = `${center.lat},${center.lng}`;
+
+  if (mode === 'streetview') {
+    return `https://www.google.com/maps/embed/v1/streetview?key=${GOOGLE_MAPS_API_KEY}&location=${centerStr}&heading=0&pitch=0&fov=90`;
+  }
+
+  const maptype = mode === 'satellite' ? 'satellite' : 'roadmap';
+
+  if (position) {
+    return `https://www.google.com/maps/embed/v1/place?key=${GOOGLE_MAPS_API_KEY}&q=${centerStr}&zoom=18&maptype=${maptype}`;
+  }
+
+  return `https://www.google.com/maps/embed/v1/view?key=${GOOGLE_MAPS_API_KEY}&center=${centerStr}&zoom=13&maptype=${maptype}`;
+}
+
 const clientId = getOrCreateClientId();
 
 export default function App() {
@@ -53,13 +91,14 @@ export default function App() {
   const [isTracking, setIsTracking] = useState(false);
   const [geoError, setGeoError] = useState(null);
   const [myPosition, setMyPosition] = useState(null);
+  const [viewMode, setViewMode] = useState('satellite');
 
   const socketRef = useRef(null);
   const watchIdRef = useRef(null);
   const lastSentRef = useRef({ position: null, time: 0 });
 
-  // Connect once on mount — one-way feed: this device's own location goes
-  // to the server for logging, nothing is ever broadcast back.
+  // One-way feed: this device's own location goes to the server for
+  // logging, nothing is ever broadcast back.
   useEffect(() => {
     const socket = io(BACKEND_URL, {
       transports: ['websocket', 'polling']
@@ -98,19 +137,22 @@ export default function App() {
           lng: position.coords.longitude
         };
 
-        setMyPosition(current);
-
         const now = Date.now();
         const { position: lastPos, time: lastTime } = lastSentRef.current;
         const moved = distanceMeters(lastPos, current);
         const elapsed = now - lastTime;
 
-        // Throttle what we send to the server (not what we show locally).
+        // Throttle BOTH the on-screen marker and the server emit together.
+        // The satellite/hybrid iframe does a full reload every time
+        // myPosition changes, so updating it on every raw GPS reading
+        // (which can fire every second or two) was causing constant heavy
+        // reloads — that's what was making the app feel slow.
         if (moved < MOVE_THRESHOLD_METERS && elapsed < MIN_EMIT_INTERVAL_MS) {
           return;
         }
 
         lastSentRef.current = { position: current, time: now };
+        setMyPosition(current);
 
         socketRef.current?.emit('send-location', {
           clientId,
@@ -149,7 +191,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
         <div className="bg-white p-6 rounded-xl shadow-sm border max-w-md text-sm text-slate-600">
           Missing Google Maps API key. Set{' '}
-          <code className="bg-slate-100 px-1 rounded">REACT_APP_GOOGLE_MAPS_API_KEY</code>{' '}
+          <code className="bg-slate-100 px-1 rounded">VITE_GOOGLE_MAPS_API_KEY</code>{' '}
           in your environment. Just enable "Maps Embed API" for it in Google
           Cloud Console — no billing account needed, it's free.
         </div>
@@ -157,14 +199,7 @@ export default function App() {
     );
   }
 
-  // Maps Embed API URLs — plain iframes, no SDK, no billing required.
-  const satelliteSrc = myPosition
-    ? `https://www.google.com/maps/embed/v1/view?key=${GOOGLE_MAPS_API_KEY}&center=${myPosition.lat},${myPosition.lng}&zoom=18&maptype=satellite`
-    : null;
-
-  const streetViewSrc = myPosition
-    ? `https://www.google.com/maps/embed/v1/streetview?key=${GOOGLE_MAPS_API_KEY}&location=${myPosition.lat},${myPosition.lng}&heading=0&pitch=0&fov=90`
-    : null;
+  const mapSrc = buildMapSrc(viewMode, myPosition);
 
   return (
     <div className="min-h-screen bg-slate-50 p-6 space-y-4 font-sans">
@@ -190,46 +225,32 @@ export default function App() {
         </button>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="h-[500px] rounded-xl overflow-hidden border shadow-sm bg-white">
-          <p className="text-xs font-semibold text-slate-500 px-3 py-2 border-b">
-            Satellite
-          </p>
-          {satelliteSrc ? (
-            <iframe
-              title="Satellite view"
-              width="100%"
-              height="100%"
-              style={{ border: 0 }}
-              loading="lazy"
-              src={satelliteSrc}
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-xs text-slate-400 text-center px-4">
-              Waiting for your location...
-            </div>
-          )}
-        </div>
+      <div className="flex gap-2 bg-white p-3 rounded-xl shadow-sm border">
+        {VIEW_MODES.map((mode) => (
+          <button
+            key={mode.id}
+            onClick={() => setViewMode(mode.id)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all ${
+              viewMode === mode.id
+                ? 'bg-rose-600 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            {mode.label}
+          </button>
+        ))}
+      </div>
 
-        <div className="h-[500px] rounded-xl overflow-hidden border shadow-sm bg-white">
-          <p className="text-xs font-semibold text-slate-500 px-3 py-2 border-b">
-            Street View
-          </p>
-          {streetViewSrc ? (
-            <iframe
-              title="Street view"
-              width="100%"
-              height="100%"
-              style={{ border: 0 }}
-              loading="lazy"
-              src={streetViewSrc}
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-xs text-slate-400 text-center px-4">
-              Waiting for your location...
-            </div>
-          )}
-        </div>
+      <div className="h-[600px] rounded-xl overflow-hidden border shadow-sm bg-white">
+        <iframe
+          key={viewMode} // force a clean reload when switching modes
+          title="Map"
+          width="100%"
+          height="100%"
+          style={{ border: 0 }}
+          loading="lazy"
+          src={mapSrc}
+        />
       </div>
     </div>
   );

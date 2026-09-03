@@ -9,8 +9,14 @@ const BACKEND_URL =
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 
 // Ambulances move fast, so we emit more eagerly than the user app does.
-const MOVE_THRESHOLD_METERS = 10;
-const MIN_EMIT_INTERVAL_MS = 3000;
+// SEND_* keeps the server's picture of the ambulance fresh (this directly
+// controls how quickly a nearby user's alert fires). MAP_MOVE_THRESHOLD is
+// a separate, distance-only gate for redrawing the iframe, so the ambulance's
+// own map doesn't blink from GPS jitter even while it's still emitting to
+// the server every couple of seconds.
+const SEND_MOVE_THRESHOLD_METERS = 10;
+const SEND_HEARTBEAT_MS = 3000;
+const MAP_MOVE_THRESHOLD_METERS = 15;
 
 // A GPS fix that hasn't moved at least this far from the last one is too
 // noisy to trust for a heading calculation (GPS jitter when near-stationary
@@ -19,13 +25,15 @@ const MIN_MOVE_FOR_HEADING_M = 5;
 
 const DEFAULT_CENTER = { lat: 26.7271, lng: 88.3953 };
 
-// --- Stable per-device identity ----------------------------------------
+// --- Stable per-tab identity ---------------------------------------------
+// sessionStorage (not localStorage) — see the same note in UserApp.jsx.
+// Prevents two ambulance tabs on one device from colliding onto one id.
 function getOrCreateAmbulanceId() {
   const KEY = 'gps-app-ambulance-id';
-  let id = localStorage.getItem(KEY);
+  let id = sessionStorage.getItem(KEY);
   if (!id) {
     id = crypto.randomUUID();
-    localStorage.setItem(KEY, id);
+    sessionStorage.setItem(KEY, id);
   }
   return id;
 }
@@ -81,7 +89,8 @@ export default function AmbulanceApp({ onSwitchRole }) {
   const socketRef = useRef(null);
   const watchIdRef = useRef(null);
   const lastFixRef = useRef({ position: null, time: 0 }); // last raw fix, for heading/speed derivation
-  const lastSentRef = useRef({ position: null, time: 0 }); // last emitted fix, for throttling
+  const lastSentRef = useRef({ position: null, time: 0 }); // throttles server emits
+  const lastMapRef = useRef({ position: null, time: 0 }); // throttles map redraws (distance-only)
 
   useEffect(() => {
     const socket = io(BACKEND_URL, {
@@ -150,24 +159,29 @@ export default function AmbulanceApp({ onSwitchRole }) {
         lastFixRef.current = { position: current, time: now };
         setHeading(nextHeading);
         setSpeedKmh(nextSpeedMs != null ? Math.round(nextSpeedMs * 3.6) : null);
-        setMyPosition(current);
 
-        // --- Throttle what we actually send to the server ----------------
+        // --- Send to server: distance OR heartbeat, whichever first -----
         const { position: lastSentPos, time: lastSentTime } = lastSentRef.current;
         const movedSinceSend = distanceMeters(lastSentPos, current);
         const elapsedSinceSend = now - lastSentTime;
-        if (movedSinceSend < MOVE_THRESHOLD_METERS && elapsedSinceSend < MIN_EMIT_INTERVAL_MS) {
-          return;
+        if (lastSentPos === null || movedSinceSend >= SEND_MOVE_THRESHOLD_METERS || elapsedSinceSend >= SEND_HEARTBEAT_MS) {
+          lastSentRef.current = { position: current, time: now };
+          socketRef.current?.emit('ambulance-location', {
+            ambulanceId,
+            latitude: current.lat,
+            longitude: current.lng,
+            heading: nextHeading,
+            speed: nextSpeedMs // server expects m/s, matches coords.speed's unit
+          });
         }
-        lastSentRef.current = { position: current, time: now };
 
-        socketRef.current?.emit('ambulance-location', {
-          ambulanceId,
-          latitude: current.lat,
-          longitude: current.lng,
-          heading: nextHeading,
-          speed: nextSpeedMs // server expects m/s, matches coords.speed's unit
-        });
+        // --- Redraw the map: distance-only, no timer override -----------
+        const { position: lastMapPos } = lastMapRef.current;
+        const movedSinceMap = distanceMeters(lastMapPos, current);
+        if (lastMapPos === null || movedSinceMap >= MAP_MOVE_THRESHOLD_METERS) {
+          lastMapRef.current = { position: current, time: now };
+          setMyPosition(current);
+        }
       },
       (err) => {
         if (err.code === err.PERMISSION_DENIED) {
@@ -193,6 +207,18 @@ export default function AmbulanceApp({ onSwitchRole }) {
         timeout: 20000
       }
     );
+  };
+
+  const stopBroadcasting = () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    setIsTracking(false);
+    // Tell the server explicitly, rather than just going quiet — this lets
+    // it immediately clear the alert on any user who currently has this
+    // ambulance flagged, instead of leaving them stuck with a stale banner.
+    socketRef.current?.emit('ambulance-stopped', { ambulanceId });
   };
 
   if (!GOOGLE_MAPS_API_KEY) {
@@ -231,13 +257,12 @@ export default function AmbulanceApp({ onSwitchRole }) {
             </button>
           )}
           <button
-            onClick={startLiveTracking}
-            disabled={isTracking}
+            onClick={isTracking ? stopBroadcasting : startLiveTracking}
             className={`px-4 py-2 text-xs font-bold rounded-lg text-white transition-all ${
-              isTracking ? 'bg-emerald-600 cursor-default' : 'bg-red-700 hover:bg-red-800'
+              isTracking ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-700 hover:bg-red-800'
             }`}
           >
-            {isTracking ? 'Broadcasting...' : 'Start Broadcasting'}
+            {isTracking ? '⏹ Stop Broadcasting' : 'Start Broadcasting'}
           </button>
         </div>
       </header>

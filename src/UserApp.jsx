@@ -158,6 +158,17 @@ export default function UserApp({ onSwitchRole }) {
   // heading, alertedAt } }
   const [activeAmbulances, setActiveAmbulances] = useState({});
 
+  // The ambulance position actually used to render the map — deliberately
+  // separate from activeAmbulances above. Every 'ambulance-update' from the
+  // server (roughly every 3s, even with near-zero real movement — it's a
+  // heartbeat) was going straight into the map src, so GPS jitter on the
+  // AMBULANCE's end was reloading your iframe just like your own jitter did
+  // before. This state only moves when the ambulance has actually moved far
+  // enough to matter; the banner's distance/speed numbers still update live
+  // off activeAmbulances regardless.
+  const [mapAmbulancePosition, setMapAmbulancePosition] = useState(null);
+  const lastAmbMapRef = useRef({ ambulanceId: null, position: null });
+
   // For requesting the (optional) OS-level notification once.
   const notifPermissionRequested = useRef(false);
 
@@ -311,6 +322,33 @@ export default function UserApp({ onSwitchRole }) {
     );
   };
 
+  const ambulanceListForMap = Object.entries(activeAmbulances).map(([id, a]) => ({ id, ...a }));
+  // If more than one ambulance is active, route the map to the nearest one.
+  const nearestAmbulance = ambulanceListForMap.length
+    ? ambulanceListForMap.reduce((a, b) => (a.distance <= b.distance ? a : b))
+    : null;
+
+  // Only move the map's ambulance marker once it's actually moved far
+  // enough, or once the nearest ambulance itself changes — never on every
+  // heartbeat. Same distance-only gating used for your own position,
+  // applied to the ambulance's position instead. Must live above the
+  // early return below (hooks can't run conditionally).
+  useEffect(() => {
+    if (!nearestAmbulance) {
+      lastAmbMapRef.current = { ambulanceId: null, position: null };
+      setMapAmbulancePosition(null);
+      return;
+    }
+    const current = { lat: nearestAmbulance.lat, lng: nearestAmbulance.lng };
+    const { ambulanceId: lastId, position: lastPos } = lastAmbMapRef.current;
+    const switchedAmbulance = lastId !== nearestAmbulance.id;
+    const movedFar = distanceMeters(lastPos, current) >= MAP_MOVE_THRESHOLD_METERS;
+    if (switchedAmbulance || lastPos === null || movedFar) {
+      lastAmbMapRef.current = { ambulanceId: nearestAmbulance.id, position: current };
+      setMapAmbulancePosition(current);
+    }
+  }, [nearestAmbulance?.id, nearestAmbulance?.lat, nearestAmbulance?.lng]);
+
   if (!GOOGLE_MAPS_API_KEY) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
@@ -324,17 +362,9 @@ export default function UserApp({ onSwitchRole }) {
     );
   }
 
-  const ambulanceList = Object.entries(activeAmbulances).map(([id, a]) => ({ id, ...a }));
-  // If more than one ambulance is active, route the map to the nearest one.
-  const nearestAmbulance = ambulanceList.length
-    ? ambulanceList.reduce((a, b) => (a.distance <= b.distance ? a : b))
-    : null;
+  const ambulanceList = ambulanceListForMap;
 
-  const mapSrc = buildMapSrc(
-    viewMode,
-    myPosition,
-    nearestAmbulance ? { lat: nearestAmbulance.lat, lng: nearestAmbulance.lng } : null
-  );
+  const mapSrc = buildMapSrc(viewMode, myPosition, mapAmbulancePosition);
 
   return (
     <div className="min-h-screen bg-slate-50 p-6 space-y-4 font-sans">

@@ -14,8 +14,18 @@ const BACKEND_URL =
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 
-const MOVE_THRESHOLD_METERS = 20; // don't emit unless moved at least this far
-const MIN_EMIT_INTERVAL_MS = 8000; // ...or at least this much time has passed
+// Two SEPARATE thresholds, on purpose:
+// - SEND_* controls how often we push a fix to the server. Keep this tight
+//   so ambulance-proximity checks stay responsive (delay in matching a user
+//   was largely just this interval being too coarse).
+// - MAP_MOVE_THRESHOLD_METERS controls when we actually redraw the embed
+//   iframe. This needs to be a distance-only check with NO time-based
+//   override — the old version force-refreshed the map on a timer even
+//   with zero real movement, so ordinary GPS jitter (a few meters of
+//   noise) looked like the pin "teleporting" every few seconds.
+const SEND_MOVE_THRESHOLD_METERS = 8;
+const SEND_HEARTBEAT_MS = 6000;
+const MAP_MOVE_THRESHOLD_METERS = 20;
 
 // Shown before the user ever shares their location, and as the fallback
 // center whenever there's no live position yet.
@@ -27,15 +37,19 @@ const VIEW_MODES = [
   { id: 'satellite', label: 'Satellite' }
 ];
 
-// --- Stable per-device identity ----------------------------------------
-// Separate localStorage key from the ambulance app so the same browser
-// can be used to test both roles without id collisions.
+// --- Stable per-tab identity ---------------------------------------------
+// sessionStorage, NOT localStorage: localStorage is shared across every tab
+// of the same browser, so two "regular driver" tabs open on one device
+// would get the SAME userId and silently overwrite each other's entry on
+// the server (only the most-recently-connected tab would ever get alerts).
+// sessionStorage is per-tab, so each tab/device gets its own id, while
+// still surviving refreshes within that same tab.
 function getOrCreateUserId() {
   const KEY = 'gps-app-user-id';
-  let id = localStorage.getItem(KEY);
+  let id = sessionStorage.getItem(KEY);
   if (!id) {
     id = crypto.randomUUID();
-    localStorage.setItem(KEY, id);
+    sessionStorage.setItem(KEY, id);
   }
   return id;
 }
@@ -149,7 +163,8 @@ export default function UserApp({ onSwitchRole }) {
 
   const socketRef = useRef(null);
   const watchIdRef = useRef(null);
-  const lastSentRef = useRef({ position: null, time: 0 });
+  const lastSentRef = useRef({ position: null, time: 0 }); // throttles server emits
+  const lastMapRef = useRef({ position: null, time: 0 }); // throttles map redraws (distance-only)
 
   // Register as early as possible (not gated behind the tracking button)
   // so the SW is already active by the time an alert needs to show.
@@ -242,26 +257,33 @@ export default function UserApp({ onSwitchRole }) {
         };
 
         const now = Date.now();
-        const { position: lastPos, time: lastTime } = lastSentRef.current;
-        const moved = distanceMeters(lastPos, current);
-        const elapsed = now - lastTime;
 
-        // Throttle BOTH the on-screen marker and the server emit together
-        // so the map iframe (which reloads on every position change)
-        // doesn't reload on every raw GPS reading.
-        if (moved < MOVE_THRESHOLD_METERS && elapsed < MIN_EMIT_INTERVAL_MS) {
-          return;
+        // --- Send to server: distance OR heartbeat, whichever first -----
+        // This keeps proximity checks responsive even if you're barely
+        // moving (crawling through traffic), instead of waiting on a big
+        // distance threshold that could never be reached.
+        const { position: lastSentPos, time: lastSentTime } = lastSentRef.current;
+        const movedSinceSend = distanceMeters(lastSentPos, current);
+        const elapsedSinceSend = now - lastSentTime;
+        if (lastSentPos === null || movedSinceSend >= SEND_MOVE_THRESHOLD_METERS || elapsedSinceSend >= SEND_HEARTBEAT_MS) {
+          lastSentRef.current = { position: current, time: now };
+          socketRef.current?.emit('user-location', {
+            userId,
+            latitude: current.lat,
+            longitude: current.lng,
+            heading: typeof position.coords.heading === 'number' ? position.coords.heading : null
+          });
         }
 
-        lastSentRef.current = { position: current, time: now };
-        setMyPosition(current);
-
-        socketRef.current?.emit('user-location', {
-          userId,
-          latitude: current.lat,
-          longitude: current.lng,
-          heading: typeof position.coords.heading === 'number' ? position.coords.heading : null
-        });
+        // --- Redraw the map: distance-only, no timer override -----------
+        // Never force a redraw just because time passed — that's what was
+        // turning ordinary GPS jitter into a blinking, "jumping" pin.
+        const { position: lastMapPos } = lastMapRef.current;
+        const movedSinceMap = distanceMeters(lastMapPos, current);
+        if (lastMapPos === null || movedSinceMap >= MAP_MOVE_THRESHOLD_METERS) {
+          lastMapRef.current = { position: current, time: now };
+          setMyPosition(current);
+        }
       },
       (err) => {
         if (err.code === err.PERMISSION_DENIED) {

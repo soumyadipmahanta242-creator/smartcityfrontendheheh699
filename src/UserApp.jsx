@@ -80,6 +80,26 @@ function playAlertBeep() {
   }
 }
 
+// Chrome on Android refuses to run `new Notification(...)` directly from a
+// page — it throws "Illegal constructor" and requires going through a
+// Service Worker's registration.showNotification() instead. Desktop Chrome/
+// Firefox are fine with the plain constructor, so we try the SW route first
+// and fall back to the constructor when there's no SW support.
+async function showBrowserNotification(title, body) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.ready;
+      await registration.showNotification(title, { body, tag: 'ambulance-alert' });
+      return;
+    }
+    new Notification(title, { body });
+  } catch (err) {
+    console.warn('Notification failed to show:', err);
+  }
+}
+
 // Builds the Maps Embed API iframe URL for the current view mode.
 // - roadmap/satellite, no active ambulance: "place" mode drops a pin at
 //   the user's own position.
@@ -131,6 +151,16 @@ export default function UserApp({ onSwitchRole }) {
   const watchIdRef = useRef(null);
   const lastSentRef = useRef({ position: null, time: 0 });
 
+  // Register as early as possible (not gated behind the tracking button)
+  // so the SW is already active by the time an alert needs to show.
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.warn('Service worker registration failed:', err);
+      });
+    }
+  }, []);
+
   useEffect(() => {
     const socket = io(BACKEND_URL, {
       transports: ['websocket', 'polling']
@@ -149,11 +179,10 @@ export default function UserApp({ onSwitchRole }) {
         [data.ambulanceId]: { ...data, alertedAt: Date.now() }
       }));
       playAlertBeep();
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        new Notification('🚨 Ambulance approaching', {
-          body: `About ${data.distance}m away and closing in on your route.`
-        });
-      }
+      showBrowserNotification(
+        '🚨 Ambulance approaching',
+        `About ${data.distance}m away and closing in on your route.`
+      );
     });
 
     socket.on('ambulance-update', (data) => {

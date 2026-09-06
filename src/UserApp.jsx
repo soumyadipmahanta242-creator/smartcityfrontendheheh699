@@ -69,14 +69,62 @@ function distanceMeters(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-// Vibrate instead of an audible beep — silent-friendly, and still noticeable
-// even with the ringer off. NOTE: iOS Safari has NO support for the
-// Vibration API at all (Apple has never implemented it) — on iPhones this
-// silently does nothing; the in-app banner and OS notification below are
-// the fallback there.
+// A loud, urgent two-tone alarm (not a reproduction of any specific
+// official warning signal — just a synthesized attention tone). Pass in a
+// pre-existing AudioContext created during a real user gesture whenever
+// possible — Chrome/Android otherwise blocks audio started from an async
+// event (like a socket message) with no fresh interaction behind it.
+function playEmergencyAlertSound(existingCtx) {
+  try {
+    const ctx = existingCtx && existingCtx.state !== 'closed'
+      ? existingCtx
+      : new (window.AudioContext || window.webkitAudioContext)();
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    const toneDuration = 0.3;
+    const gapDuration = 0.05;
+    const frequencies = [1300, 950, 1300, 950, 1300, 950];
+    let t = ctx.currentTime;
+
+    frequencies.forEach((freq) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + toneDuration - 0.02);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + toneDuration);
+      t += toneDuration + gapDuration;
+    });
+  } catch (err) {
+    console.warn('Could not play alert sound:', err);
+  }
+}
+
+// Vibrate — silent-friendly, still noticeable with the ringer off.
+// NOTE: iOS Safari has NO Vibration API support at all (Apple has never
+// implemented it) — silently does nothing on iPhones. On Android Chrome,
+// the spec only allows vibrating from a FOREGROUND tab that has had a real
+// user interaction ("sticky activation") — a locked screen, backgrounded
+// tab, or system-level vibration/DND setting will all silently block it
+// with no error, hence the console warning below if it's refused.
 function vibrateForAlert() {
-  if ('vibrate' in navigator) {
-    navigator.vibrate([250, 100, 250, 100, 250]);
+  if (!('vibrate' in navigator)) {
+    console.warn('Vibration API not supported on this device/browser.');
+    return;
+  }
+  const ok = navigator.vibrate([250, 100, 250, 100, 250]);
+  if (!ok) {
+    console.warn(
+      'navigator.vibrate() was refused — tab may be backgrounded/screen off, or vibration is disabled at the OS level.'
+    );
   }
 }
 
@@ -163,6 +211,12 @@ export default function UserApp({ onSwitchRole }) {
   const lastSentRef = useRef({ position: null, time: 0 }); // throttles server emits
   const lastMapRef = useRef({ position: null, time: 0 }); // throttles map redraws (distance-only)
 
+  // Created inside the "Share My Live Location" click (a real user
+  // gesture) and reused for every alert sound afterward — this is what
+  // makes the later async alert sound reliable instead of being silently
+  // blocked by the browser's autoplay/activation rules.
+  const audioCtxRef = useRef(null);
+
   // Register as early as possible (not gated behind the tracking button)
   // so the SW is already active by the time an alert needs to show.
   useEffect(() => {
@@ -190,7 +244,11 @@ export default function UserApp({ onSwitchRole }) {
         ...prev,
         [data.ambulanceId]: { ...data, alertedAt: Date.now() }
       }));
+      // Sound and vibration fire together, every time — neither depends on
+      // the other, so if one gets blocked on a given device the other
+      // still gets through.
       vibrateForAlert();
+      playEmergencyAlertSound(audioCtxRef.current);
       showBrowserNotification(
         '🚨 Ambulance approaching',
         `About ${data.distance}m away and closing in on your route.`
@@ -235,10 +293,23 @@ export default function UserApp({ onSwitchRole }) {
 
     // Best-effort ask for OS notification permission so alerts can still
     // reach the user if they've switched tabs/apps. Not required — the
-    // in-app banner + vibration work regardless of the answer.
+    // in-app banner + vibration + sound work regardless of the answer.
     if (!notifPermissionRequested.current && typeof Notification !== 'undefined') {
       notifPermissionRequested.current = true;
       Notification.requestPermission().catch(() => {});
+    }
+
+    // Create (or resume) the AudioContext HERE, inside a real click — see
+    // the note on audioCtxRef above.
+    if (!audioCtxRef.current) {
+      try {
+        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      } catch {
+        // Web Audio unavailable — the alert will still try to create one
+        // on the fly later, just less reliably.
+      }
+    } else if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume().catch(() => {});
     }
 
     setGeoError(null);

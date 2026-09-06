@@ -183,22 +183,32 @@
   }
 }
 @keyframes ambulanceFlash {
-  0% {
-    color: #dc2626; /* Red */
-    text-shadow: 0 0 5px #dc2626, 0 0 15px #dc2626;
+  0%, 20% {
+    color: red;
+    text-shadow: 0 0 12px red;
   }
 
-  50% {
-    color: #2563eb; /* Blue */
-    text-shadow: 0 0 5px #2563eb, 0 0 15px #2563eb;
+  21%, 40% {
+    color: white;
+    text-shadow: none;
   }
 
-  100% {
-    color: #dc2626;
-    text-shadow: 0 0 5px #dc2626, 0 0 15px #dc2626;
+  41%, 60% {
+    color: blue;
+    text-shadow: 0 0 12px blue;
+  }
+
+  61%, 80% {
+    color: white;
+    text-shadow: none;
+  }
+
+  81%, 100% {
+    color: red;
+    text-shadow: 0 0 12px red;
   }
 }
 
 .ambulance-text {
-  animation: ambulanceFlash 0.6s infinite;
+  animation: ambulanceFlash 0.8s infinite;
 }

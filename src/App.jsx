@@ -21,8 +21,11 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
         <div className="bg-white p-8 rounded-2xl shadow-sm border max-w-sm w-full text-center space-y-4">
-          <h1 className="text-red-800 text-5xl">
-    Hi
+     <h1
+  style={{ color: "red", fontSize: "40px" }}
+  className="text-xl font-bold"
+>
+  RAPID LANE
 </h1>
           <p className="text-xs text-slate-500">Pick a role to continue — you can switch later.</p>
           <div className="space-y-3 pt-2">

@@ -21,7 +21,9 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
         <div className="bg-white p-8 rounded-2xl shadow-sm border max-w-sm w-full text-center space-y-4">
-          <h1 className="text-xl font-bold text-red-800">RAPID LANE</h1>
+          <h1 className="text-red-800 text-5xl">
+    TEST 123456789
+</h1>
           <p className="text-xs text-slate-500">Pick a role to continue — you can switch later.</p>
           <div className="space-y-3 pt-2">
             <button

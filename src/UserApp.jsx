@@ -69,28 +69,14 @@ function distanceMeters(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-// A short two-pulse beep so an alert is noticeable even if you're not
-// looking at the screen. Uses the Web Audio API, no asset files needed.
-function playAlertBeep() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const pulse = (startTime) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = 880;
-      gain.gain.setValueAtTime(0.001, startTime);
-      gain.gain.exponentialRampToValueAtTime(0.2, startTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.18);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(startTime);
-      osc.stop(startTime + 0.2);
-    };
-    pulse(ctx.currentTime);
-    pulse(ctx.currentTime + 0.25);
-  } catch {
-    // Web Audio not available — fail silently, the visual banner still shows.
+// Vibrate instead of an audible beep — silent-friendly, and still noticeable
+// even with the ringer off. NOTE: iOS Safari has NO support for the
+// Vibration API at all (Apple has never implemented it) — on iPhones this
+// silently does nothing; the in-app banner and OS notification below are
+// the fallback there.
+function vibrateForAlert() {
+  if ('vibrate' in navigator) {
+    navigator.vibrate([250, 100, 250, 100, 250]);
   }
 }
 
@@ -204,7 +190,7 @@ export default function UserApp({ onSwitchRole }) {
         ...prev,
         [data.ambulanceId]: { ...data, alertedAt: Date.now() }
       }));
-      playAlertBeep();
+      vibrateForAlert();
       showBrowserNotification(
         '🚨 Ambulance approaching',
         `About ${data.distance}m away and closing in on your route.`
@@ -249,7 +235,7 @@ export default function UserApp({ onSwitchRole }) {
 
     // Best-effort ask for OS notification permission so alerts can still
     // reach the user if they've switched tabs/apps. Not required — the
-    // in-app banner + beep work regardless of the answer.
+    // in-app banner + vibration work regardless of the answer.
     if (!notifPermissionRequested.current && typeof Notification !== 'undefined') {
       notifPermissionRequested.current = true;
       Notification.requestPermission().catch(() => {});

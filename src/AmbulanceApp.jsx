@@ -240,7 +240,12 @@ export default function AmbulanceApp({ onSwitchRole }) {
     <div className="min-h-screen bg-slate-50 p-6 space-y-4 font-sans">
       <header className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
         <div>
-          <h1 className="text-xl font-bold text-red-800">🚑 Ambulance Broadcast</h1>
+          <h1
+  style={{ color: "red", fontSize: "40px" }}
+  className="text-xl font-bold"
+>
+  AMBULANCE BROADCAST
+</h1>
           <p className="text-xs text-slate-500">
             Status: {isConnected ? '🟢 Connected' : '🔴 Disconnected'}
           </p>
